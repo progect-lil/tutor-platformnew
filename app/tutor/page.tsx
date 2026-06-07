@@ -224,8 +224,3 @@ export default function TutorPage() {
         </div>
     );
 }
-
- 
- 
- 
- 
