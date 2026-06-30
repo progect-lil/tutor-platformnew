@@ -1,274 +1,192 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 
-type Lesson = {
-    id: string;
-    subject: string;
-    lesson_date: string;
-    lesson_time: string;
-    duration_minutes: number;
-    status: string;
+type Summary = {
+    totalPaid: number;
+    totalPending: number;
+    lessonsCompleted: number;
+    lessonsTotal: number;
+    hwDone: number;
+    hwTotal: number;
+    topicsDone: number;
 };
 
-type Homework = {
-    id: string;
-    title: string;
-    due_date: string;
-    status: string;
-    grade: string;
-    tutor_comment: string;
-};
+const StatCard = ({
+    href, icon, iconBg, accentColor, title, sub, subClass, progress, progressColor,
+}: {
+    href: string; icon: string; iconBg: string; accentColor: string;
+    title: string; sub: string; subClass?: string; progress: number; progressColor: string;
+}) => (
+    <Link href={href}
+        className="block"
+        style={{
+            background: "#fff", borderRadius: 16, border: "0.5px solid #E8E6F0",
+            padding: "20px", textDecoration: "none", transition: "border-color 0.2s",
+        }}
+        onMouseEnter={e => (e.currentTarget.style.borderColor = accentColor)}
+        onMouseLeave={e => (e.currentTarget.style.borderColor = "#E8E6F0")}>
 
-type Payment = {
-    id: string;
-    amount: number;
-    status: string;
-    description: string;
-    created_at: string;
-    paid_at: string;
-};
+        <div className="flex items-center justify-center text-xl"
+            style={{ width: 44, height: 44, borderRadius: 12, background: iconBg, marginBottom: 14 }}>
+            {icon}
+        </div>
 
-export default function ParentPage() {
+        <div style={{ fontSize: 14, fontWeight: 600, color: "#1A1523", marginBottom: 5 }}>{title}</div>
+        <div style={{ fontSize: 12, color: subClass === "success" ? "#059669" : subClass === "warn" ? "#D97706" : "#9490A4", fontWeight: subClass ? 500 : 400 }}>
+            {sub}
+        </div>
+
+        <div style={{ marginTop: 12 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#C4B5FD", marginBottom: 4 }}>
+                <span>Прогресс</span><span>{Math.round(progress)}%</span>
+            </div>
+            <div style={{ height: 4, background: "#F1EFF8", borderRadius: 99, overflow: "hidden" }}>
+                <div style={{ height: "100%", width: `${progress}%`, background: progressColor, borderRadius: 99, transition: "width 0.6s ease" }} />
+            </div>
+        </div>
+    </Link>
+);
+
+export default function ParentHomePage() {
     const router = useRouter();
-    const [user, setUser] = useState<any>(null);
-    const [profile, setProfile] = useState<any>(null);
-    const [child, setChild] = useState<any>(null);
-    const [lessons, setLessons] = useState<Lesson[]>([]);
-    const [homeworks, setHomeworks] = useState<Homework[]>([]);
-    const [payments, setPayments] = useState<Payment[]>([]);
+    const [summary, setSummary] = useState<Summary | null>(null);
+    const [studentName, setStudentName] = useState("");
     const [loading, setLoading] = useState(true);
-    const [activeTab, setActiveTab] = useState<"schedule" | "homework" | "payments">("schedule");
 
-    useEffect(() => { checkAuth(); }, []);
+    useEffect(() => { loadData(); }, []);
 
-    const checkAuth = async () => {
+    const loadData = async () => {
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) { router.push("/login"); return; }
-        setUser(user);
 
         const { data: profile } = await supabase
-            .from("profiles")
-            .select("*")
-            .eq("id", user.id)
-            .single();
-        setProfile(profile);
+            .from("profiles").select("id, child_id, role").eq("id", user.id).single();
 
-        // Ищем ребёнка — привязан через поле child_id в profiles
-        if (profile?.child_id) {
-            const { data: childData } = await supabase
-                .from("profiles")
-                .select("*")
-                .eq("id", profile.child_id)
-                .single();
-            setChild(childData);
+        if (!profile) { setLoading(false); return; }
 
-            const today = new Date().toISOString().split("T")[0];
-
-            // Расписание ребёнка
-            const { data: lessonsData } = await supabase
-                .from("schedule")
-                .select("*")
-                .eq("student_id", profile.child_id)
-                .gte("lesson_date", today)
-                .order("lesson_date", { ascending: true });
-            setLessons(lessonsData || []);
-
-            // Домашка ребёнка
-            const { data: hwData } = await supabase
-                .from("homework")
-                .select("*")
-                .eq("student_id", profile.child_id)
-                .order("created_at", { ascending: false });
-            setHomeworks(hwData || []);
-
-            // Оплата
-            const { data: payData } = await supabase
-                .from("payments")
-                .select("*")
-                .eq("student_id", profile.child_id)
-                .order("created_at", { ascending: false });
-            setPayments(payData || []);
+        let studentIds: string[] = [];
+        if (profile.role === "student") {
+            studentIds = [profile.id];
+        } else if (profile.role === "parent") {
+            if (profile.child_id) {
+                studentIds = [profile.child_id];
+            } else {
+                const { data: children } = await supabase
+                    .from("profiles").select("id, full_name")
+                    .eq("parent_id", user.id).eq("role", "student");
+                if (children?.length > 0) {
+                    studentIds = children.map((c: any) => c.id);
+                    if (children[0]?.full_name) setStudentName(children[0].full_name);
+                }
+            }
         }
 
+        if (studentIds.length === 0) { setLoading(false); return; }
+
+        const { data: subs } = await supabase
+            .from("subscriptions").select("id, total_amount, status")
+            .in("student_id", studentIds).neq("status", "cancelled");
+
+        const totalPaid = (subs || []).filter(s => s.status === "paid").reduce((a, s) => a + s.total_amount, 0);
+        const totalPending = (subs || []).filter(s => s.status === "pending").reduce((a, s) => a + s.total_amount, 0);
+
+        const subIds = (subs || []).map(s => s.id);
+        let lessonsCompleted = 0, lessonsTotal = 0;
+        if (subIds.length > 0) {
+            const { data: lessons } = await supabase
+                .from("schedule").select("status").in("subscription_id", subIds);
+            lessonsTotal = (lessons || []).length;
+            lessonsCompleted = (lessons || []).filter(l => l.status === "completed").length;
+        }
+
+        const { data: hw } = await supabase
+            .from("homework").select("status").in("student_id", studentIds);
+        const hwTotal = (hw || []).length;
+        const hwDone = (hw || []).filter(h => h.status === "submitted" || h.status === "graded").length;
+
+        const { data: topics } = await supabase
+            .from("topics").select("id").in("student_id", studentIds).eq("is_completed", true);
+        const topicsDone = (topics || []).length;
+
+        setSummary({ totalPaid, totalPending, lessonsCompleted, lessonsTotal, hwDone, hwTotal, topicsDone });
         setLoading(false);
     };
 
-    const logout = async () => {
-        await supabase.auth.signOut();
-        router.push("/login");
-    };
+    if (loading) return (
+        <div className="flex items-center justify-center h-64" style={{ color: "#C4B5FD", fontSize: 14 }}>
+            Загрузка...
+        </div>
+    );
 
-    const statusHW: Record<string, { label: string; color: string }> = {
-        assigned: { label: "Не сдано", color: "bg-orange-100 text-orange-700" },
-        submitted: { label: "На проверке", color: "bg-blue-100 text-blue-700" },
-        checked: { label: "Проверено", color: "bg-green-100 text-green-700" },
-    };
-
-    const pendingPayments = payments.filter(p => p.status === "pending");
-    const totalDebt = pendingPayments.reduce((sum, p) => sum + p.amount, 0);
-
-    if (loading) return <div className="min-h-screen flex items-center justify-center text-slate-400">Загрузка...</div>;
+    const hwPct = summary && summary.hwTotal > 0 ? (summary.hwDone / summary.hwTotal) * 100 : 0;
+    const lessonsPct = summary && summary.lessonsTotal > 0 ? (summary.lessonsCompleted / summary.lessonsTotal) * 100 : 0;
 
     return (
-        <div className="min-h-screen bg-slate-50">
-            {/* Шапка */}
-            <div className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-full bg-purple-100 flex items-center justify-center text-purple-600 font-bold text-sm">
-                        {(profile?.name || "Р")[0].toUpperCase()}
-                    </div>
-                    <div>
-                        <div className="font-semibold text-slate-900 text-sm">{profile?.name || "Родитель"}</div>
-                        <div className="text-xs text-slate-400">{user?.email}</div>
-                    </div>
-                </div>
-                <div className="flex items-center gap-3">
-                    <span className="text-xs bg-purple-100 text-purple-700 px-3 py-1 rounded-full font-medium">Родитель</span>
-                    <button onClick={logout} className="text-sm text-slate-400 hover:text-slate-600">Выйти</button>
-                </div>
-            </div>
-
-            <div className="p-6 max-w-2xl mx-auto">
-                {/* Нет ребёнка */}
-                {!child ? (
-                    <div className="text-center py-20">
-                        <div className="text-5xl mb-4">👶</div>
-                        <div className="text-lg font-semibold text-slate-700">Ребёнок ещё не привязан</div>
-                        <div className="text-sm text-slate-400 mt-2 max-w-sm mx-auto">
-                            Напишите репетитору — он привяжет аккаунт ребёнка к вашему, и здесь появится вся информация
-                        </div>
-                    </div>
-                ) : (
-                    <>
-                        {/* Карточка ребёнка */}
-                        <div className="bg-white rounded-2xl p-5 shadow-sm border border-slate-100 mb-6">
-                            <div className="flex items-center gap-4">
-                                <div className="w-14 h-14 rounded-2xl bg-indigo-100 flex items-center justify-center text-indigo-600 text-2xl font-bold">
-                                    {(child.name || "У")[0].toUpperCase()}
-                                </div>
-                                <div>
-                                    <div className="font-bold text-slate-900 text-lg">{child.name || child.email}</div>
-                                    <div className="text-sm text-slate-400">Ученик</div>
-                                </div>
-                                <div className="ml-auto flex gap-3 text-center">
-                                    <div>
-                                        <div className="text-xl font-bold text-indigo-600">{lessons.length}</div>
-                                        <div className="text-xs text-slate-400">Уроков</div>
-                                    </div>
-                                    <div>
-                                        <div className="text-xl font-bold text-orange-500">{homeworks.filter(h => h.status === "assigned").length}</div>
-                                        <div className="text-xs text-slate-400">ДЗ сдать</div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        {/* Долг */}
-                        {totalDebt > 0 && (
-                            <div className="mb-4 bg-red-50 border border-red-200 rounded-2xl p-4 flex items-center gap-3">
-                                <span className="text-2xl">💳</span>
-                                <div>
-                                    <div className="font-semibold text-red-800">Задолженность: {totalDebt.toLocaleString()} ₽</div>
-                                    <div className="text-sm text-red-600">Пожалуйста, оплатите занятия</div>
-                                </div>
-                                <button onClick={() => setActiveTab("payments")} className="ml-auto text-sm text-red-700 underline">Подробнее</button>
-                            </div>
-                        )}
-
-                        {/* Табы */}
-                        <div className="flex bg-white rounded-2xl p-1 shadow-sm border border-slate-100 mb-6">
-                            {(["schedule", "homework", "payments"] as const).map(tab => (
-                                <button
-                                    key={tab}
-                                    onClick={() => setActiveTab(tab)}
-                                    className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-colors ${activeTab === tab ? "bg-indigo-600 text-white shadow" : "text-slate-500 hover:text-slate-700"
-                                        }`}
-                                >
-                                    {tab === "schedule" && "📅 Расписание"}
-                                    {tab === "homework" && "📚 Домашка"}
-                                    {tab === "payments" && "💰 Оплата"}
-                                </button>
-                            ))}
-                        </div>
-
-                        {/* Расписание */}
-                        {activeTab === "schedule" && (
-                            <div className="space-y-3">
-                                {lessons.length === 0 ? (
-                                    <div className="text-center py-12 text-slate-400">Нет запланированных уроков</div>
-                                ) : lessons.map(l => (
-                                    <div key={l.id} className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 flex items-center gap-4">
-                                        <div className="text-center bg-indigo-50 rounded-xl px-4 py-2 min-w-[70px]">
-                                            <div className="text-xs text-indigo-500">{new Date(l.lesson_date + "T00:00:00").toLocaleDateString("ru-RU", { day: "numeric", month: "short" })}</div>
-                                            <div className="text-base font-bold text-indigo-700">{l.lesson_time.slice(0, 5)}</div>
-                                        </div>
-                                        <div>
-                                            <div className="font-semibold text-slate-900">{l.subject}</div>
-                                            <div className="text-sm text-slate-400">{l.duration_minutes} минут</div>
-                                        </div>
-                                        <span className={`ml-auto text-xs px-2 py-1 rounded-full ${l.status === "completed" ? "bg-green-100 text-green-700" : "bg-blue-100 text-blue-700"}`}>
-                                            {l.status === "completed" ? "Проведён" : "Запланирован"}
-                                        </span>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-
-                        {/* Домашка */}
-                        {activeTab === "homework" && (
-                            <div className="space-y-3">
-                                {homeworks.length === 0 ? (
-                                    <div className="text-center py-12 text-slate-400">Нет заданий</div>
-                                ) : homeworks.map(hw => (
-                                    <div key={hw.id} className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100">
-                                        <div className="flex items-start justify-between">
-                                            <div>
-                                                <div className="font-semibold text-slate-900">{hw.title}</div>
-                                                {hw.due_date && (
-                                                    <div className="text-xs text-slate-400 mt-1">до {new Date(hw.due_date).toLocaleDateString("ru-RU")}</div>
-                                                )}
-                                                {hw.grade && (
-                                                    <div className="mt-2 flex items-center gap-2">
-                                                        <span className="bg-green-600 text-white text-sm font-bold px-3 py-0.5 rounded-lg">{hw.grade}</span>
-                                                        {hw.tutor_comment && <span className="text-sm text-slate-500">{hw.tutor_comment}</span>}
-                                                    </div>
-                                                )}
-                                            </div>
-                                            <span className={`text-xs px-2 py-1 rounded-full font-medium ${statusHW[hw.status]?.color}`}>
-                                                {statusHW[hw.status]?.label}
-                                            </span>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-
-                        {/* Оплата */}
-                        {activeTab === "payments" && (
-                            <div className="space-y-3">
-                                {payments.length === 0 ? (
-                                    <div className="text-center py-12 text-slate-400">Нет записей об оплате</div>
-                                ) : payments.map(p => (
-                                    <div key={p.id} className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 flex items-center gap-4">
-                                        <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${p.status === "paid" ? "bg-green-500" : "bg-orange-400"}`} />
-                                        <div className="flex-1">
-                                            <div className="font-medium text-slate-900">{p.description || "Оплата урока"}</div>
-                                            <div className="text-xs text-slate-400">{new Date(p.created_at).toLocaleDateString("ru-RU")}</div>
-                                            {p.paid_at && <div className="text-xs text-green-600">Оплачено {new Date(p.paid_at).toLocaleDateString("ru-RU")}</div>}
-                                        </div>
-                                        <div className="font-bold text-slate-900">{p.amount.toLocaleString()} ₽</div>
-                                        <span className={`text-xs px-2 py-1 rounded-full ${p.status === "paid" ? "bg-green-100 text-green-700" : "bg-orange-100 text-orange-700"}`}>
-                                            {p.status === "paid" ? "Оплачено" : "Ожидается"}
-                                        </span>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                    </>
+        <div style={{ padding: "32px 28px", maxWidth: 640, margin: "0 auto" }}>
+            <div style={{ marginBottom: 28 }}>
+                <h1 style={{ fontSize: 22, fontWeight: 600, color: "#1A1523" }}>Привет 👋</h1>
+                {studentName && (
+                    <p style={{ fontSize: 13, color: "#9490A4", marginTop: 5 }}>
+                        Вы следите за успехами:{" "}
+                        <span style={{ color: "#6B6578", fontWeight: 500 }}>{studentName}</span>
+                    </p>
                 )}
             </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+                <StatCard
+                    href="/parent/payments"
+                    icon="💰" iconBg="#ECFDF5" accentColor="#A7F3D0"
+                    title="Оплата"
+                    sub={summary?.totalPending ? `Ожидает: ${summary.totalPending.toLocaleString()} ₽` : "Всё оплачено ✓"}
+                    subClass={summary?.totalPending ? "warn" : "success"}
+                    progress={100} progressColor="#10B981"
+                />
+                <StatCard
+                    href="/parent/progress?tab=hw"
+                    icon="📝" iconBg="#FFFBEB" accentColor="#FDE68A"
+                    title="Домашние задания"
+                    sub={summary ? `Сдано ${summary.hwDone} из ${summary.hwTotal}` : "—"}
+                    progress={hwPct} progressColor="#F59E0B"
+                />
+                <StatCard
+                    href="/parent/progress?tab=schedule"
+                    icon="📅" iconBg="#EEF2FF" accentColor="#C7D2FE"
+                    title="Расписание"
+                    sub={summary ? `Проведено ${summary.lessonsCompleted} из ${summary.lessonsTotal} уроков` : "—"}
+                    progress={lessonsPct} progressColor="#6366F1"
+                />
+                <StatCard
+                    href="/parent/progress?tab=topics"
+                    icon="📚" iconBg="#F5F3FF" accentColor="#DDD6FE"
+                    title="Темы и прогресс"
+                    sub={summary ? `Пройдено тем: ${summary.topicsDone}` : "—"}
+                    progress={0} progressColor="#8B5CF6"
+                />
+            </div>
+
+            {summary && summary.totalPending > 0 && (
+                <Link href="/parent/payments"
+                    style={{
+                        marginTop: 16, display: "flex", alignItems: "center", gap: 12,
+                        background: "#FFFBEB", border: "0.5px solid #FDE68A", borderRadius: 14,
+                        padding: "14px 16px", textDecoration: "none"
+                    }}>
+                    <span style={{ fontSize: 20 }}>💳</span>
+                    <div>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: "#92400E" }}>
+                            Ожидает оплаты: {summary.totalPending.toLocaleString()} ₽
+                        </div>
+                        <div style={{ fontSize: 11, color: "#B45309", marginTop: 2 }}>
+                            Нажмите, чтобы перейти к оплате
+                        </div>
+                    </div>
+                    <span style={{ marginLeft: "auto", color: "#D97706" }}>→</span>
+                </Link>
+            )}
         </div>
     );
 }

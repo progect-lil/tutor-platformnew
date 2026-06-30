@@ -1,49 +1,75 @@
 "use client";
+
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 
-type Lesson = {
-    id: string;
-    subject: string;
-    lesson_date: string;
-    lesson_time: string;
-    duration_minutes: number;
-    zoom_link: string;
-    status: string;
-};
-
-type Homework = {
-    id: string;
-    title: string;
-    due_date: string;
-    status: string;
-    grade: string;
-    tutor_comment: string;
-};
-
 export default function StudentPage() {
     const router = useRouter();
-    const [user, setUser] = useState<any>(null);
     const [profile, setProfile] = useState<any>(null);
-    const [lessons, setLessons] = useState<Lesson[]>([]);
-    const [homeworks, setHomeworks] = useState<Homework[]>([]);
+    const [todayLessons, setTodayLessons] = useState<any[]>([]);
+    const [upcomingLessons, setUpcomingLessons] = useState<any[]>([]);
+    const [pendingHW, setPendingHW] = useState<number>(0);
+    const [completedHW, setCompletedHW] = useState<number>(0);
+    const [totalLessons, setTotalLessons] = useState<number>(0);
     const [loading, setLoading] = useState(true);
+    const [menuOpen, setMenuOpen] = useState(false);
 
-    useEffect(() => { checkAuth(); }, []);
+    useEffect(() => { init(); }, []);
 
-    const checkAuth = async () => {
+    const init = async () => {
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) { router.push("/login"); return; }
-        setUser(user);
-        const { data: profile } = await supabase.from("profiles").select("*").eq("id", user.id).single();
-        setProfile(profile);
+
+        const { data: prof } = await supabase
+            .from("profiles")
+            .select("*")
+            .eq("id", user.id)
+            .single();
+
+        if (!prof || prof.role !== "student") { router.push("/login"); return; }
+        setProfile(prof);
+
         const today = new Date().toISOString().split("T")[0];
-        const { data: lessonsData } = await supabase.from("schedule").select("*").eq("student_id", user.id).gte("lesson_date", today).order("lesson_date", { ascending: true }).limit(5);
-        setLessons(lessonsData || []);
-        const { data: hwData } = await supabase.from("homework").select("*").eq("student_id", user.id).order("created_at", { ascending: false }).limit(5);
-        setHomeworks(hwData || []);
+
+        const { data: lessons } = await supabase
+            .from("schedule")
+            .select("*")
+            .eq("student_id", user.id)
+            .eq("lesson_date", today);
+        setTodayLessons(lessons || []);
+
+        const { data: upcoming } = await supabase
+            .from("schedule")
+            .select("*")
+            .eq("student_id", user.id)
+            .gte("lesson_date", today)
+            .order("lesson_date", { ascending: true })
+            .order("lesson_time", { ascending: true })
+            .limit(5);
+        setUpcomingLessons(upcoming || []);
+
+        const { data: hwPending } = await supabase
+            .from("homework")
+            .select("id")
+            .eq("student_id", user.id)
+            .eq("status", "assigned");
+        setPendingHW((hwPending || []).length);
+
+        const { data: hwDone } = await supabase
+            .from("homework")
+            .select("id")
+            .eq("student_id", user.id)
+            .eq("status", "submitted");
+        setCompletedHW((hwDone || []).length);
+
+        const { count } = await supabase
+            .from("schedule")
+            .select("id", { count: "exact", head: true })
+            .eq("student_id", user.id);
+        setTotalLessons(count || 0);
+
         setLoading(false);
     };
 
@@ -52,161 +78,165 @@ export default function StudentPage() {
         router.push("/login");
     };
 
-    const todayStr = new Date().toISOString().split("T")[0];
-    const todayLessons = lessons.filter(l => l.lesson_date === todayStr);
-    const pendingHW = homeworks.filter(h => h.status === "assigned");
-    const newGrades = homeworks.filter(h => h.status === "checked" && h.grade);
+    const getDayLabel = (dateStr: string) => {
+        const today = new Date().toISOString().split("T")[0];
+        const tomorrow = new Date(Date.now() + 86400000).toISOString().split("T")[0];
+        if (dateStr === today) return "Сегодня";
+        if (dateStr === tomorrow) return "Завтра";
+        return new Date(dateStr + "T00:00:00").toLocaleDateString("ru-RU", { day: "numeric", month: "short" });
+    };
 
     if (loading) return (
-        <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-            <div className="text-slate-400">Загрузка...</div>
-        </div>
+        <div className="flex items-center justify-center min-h-screen text-gray-400">Загрузка...</div>
     );
 
     return (
-        <div className="min-h-screen bg-slate-50 pb-24 md:pb-6">
+        <div className="min-h-screen bg-gray-50">
 
-            {/* Шапка */}
-            <div className="bg-white border-b border-slate-200 px-4 md:px-6 py-4 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold text-sm flex-shrink-0">
-                        {(profile?.name || user?.email || "У")[0].toUpperCase()}
-                    </div>
-                    <div className="min-w-0">
-                        <div className="font-semibold text-slate-900 text-sm">{profile?.name || "Ученик"}</div>
-                        <div className="text-xs text-slate-400 truncate hidden md:block">{user?.email}</div>
-                    </div>
-                </div>
+            {/* Мобайл шапка */}
+            <div className="md:hidden fixed top-0 left-0 right-0 bg-white border-b border-gray-100 px-4 py-3 flex items-center justify-between z-20">
                 <div className="flex items-center gap-2">
-                    <span className="text-xs bg-indigo-100 text-indigo-700 px-2 md:px-3 py-1 rounded-full font-medium">Ученик</span>
-                    <button onClick={logout} className="text-sm text-slate-400 hover:text-slate-600">Выйти</button>
+                    <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center text-white text-sm font-bold">У</div>
+                    <span className="font-semibold text-gray-900 text-sm">Кабинет ученика</span>
                 </div>
+                <button onClick={() => setMenuOpen(!menuOpen)} className="w-9 h-9 flex items-center justify-center rounded-xl bg-gray-100 text-gray-600">
+                    {menuOpen ? "✕" : "☰"}
+                </button>
             </div>
 
-            <div className="p-4 md:p-6 max-w-3xl mx-auto">
+            {/* Мобайл меню */}
+            {menuOpen && (
+                <div className="md:hidden fixed inset-0 z-10" onClick={() => setMenuOpen(false)}>
+                    <div className="absolute top-14 right-4 bg-white rounded-2xl shadow-xl border border-gray-100 p-3 w-56" onClick={e => e.stopPropagation()}>
+                        <nav className="flex flex-col gap-1">
+                            <Link href="/student" onClick={() => setMenuOpen(false)} className="flex items-center gap-3 px-3 py-2.5 rounded-xl bg-indigo-50 text-indigo-700 text-sm font-medium">🏠 Главная</Link>
+                            <Link href="/student/schedule" onClick={() => setMenuOpen(false)} className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-gray-600 text-sm">📅 Расписание</Link>
+                            <Link href="/student/homework" onClick={() => setMenuOpen(false)} className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-gray-600 text-sm">📚 Домашка</Link>
+                            <Link href="/topics" onClick={() => setMenuOpen(false)} className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-gray-600 text-sm">📊 Темы</Link>
+                            <Link href="/materials" onClick={() => setMenuOpen(false)} className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-gray-600 text-sm">📂 Материалы</Link>
+                            <Link href="/student/grades" onClick={() => setMenuOpen(false)} className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-gray-600 text-sm">⭐ Оценки</Link>
+                            <Link href="/student/profile" onClick={() => setMenuOpen(false)} className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-gray-600 text-sm">👤 Профиль</Link>
+                            <div className="my-1 border-t border-gray-100" />
+                            <button onClick={logout} className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-red-400 text-sm text-left">🚪 Выйти</button>
+                        </nav>
+                    </div>
+                </div>
+            )}
+
+            {/* Основной контент */}
+            <div className="max-w-5xl mx-auto p-4 md:p-8 pt-20 md:pt-8 pb-24 md:pb-8">
 
                 {/* Приветствие */}
-                <div className="mb-5">
-                    <h1 className="text-xl md:text-2xl font-bold text-slate-900">
+                <div className="mb-8">
+                    <h1 className="text-2xl md:text-3xl font-bold text-gray-900">
                         Привет, {profile?.name?.split(" ")[0] || "Ученик"} 👋
                     </h1>
-                    <p className="text-slate-500 text-sm mt-1">
+                    <p className="text-gray-400 text-sm mt-1">
                         {new Date().toLocaleDateString("ru-RU", { weekday: "long", day: "numeric", month: "long" })}
                     </p>
                 </div>
 
-                {/* Карточки статистики */}
-                <div className="grid grid-cols-3 gap-3 mb-5">
-                    <div className="bg-white rounded-2xl p-3 md:p-4 shadow-sm border border-slate-100 text-center">
-                        <div className="text-xl md:text-2xl font-bold text-indigo-600">{lessons.length}</div>
-                        <div className="text-xs text-slate-500 mt-1">Уроков впереди</div>
+                {/* Статистика */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 mb-6">
+                    <div className="bg-white rounded-2xl p-4 md:p-5 border border-gray-100 shadow-sm">
+                        <div className="text-2xl md:text-3xl font-bold text-indigo-600">{todayLessons.length}</div>
+                        <div className="text-xs md:text-sm text-gray-500 mt-1">Уроков сегодня</div>
                     </div>
-                    <div className="bg-white rounded-2xl p-3 md:p-4 shadow-sm border border-slate-100 text-center">
-                        <div className="text-xl md:text-2xl font-bold text-orange-500">{pendingHW.length}</div>
-                        <div className="text-xs text-slate-500 mt-1">Сдать ДЗ</div>
+                    <div className="bg-white rounded-2xl p-4 md:p-5 border border-gray-100 shadow-sm">
+                        <div className="text-2xl md:text-3xl font-bold text-violet-500">{totalLessons}</div>
+                        <div className="text-xs md:text-sm text-gray-500 mt-1">Уроков всего</div>
                     </div>
-                    <div className="bg-white rounded-2xl p-3 md:p-4 shadow-sm border border-slate-100 text-center">
-                        <div className="text-xl md:text-2xl font-bold text-green-600">{newGrades.length}</div>
-                        <div className="text-xs text-slate-500 mt-1">Новых оценок</div>
+                    <div className="bg-white rounded-2xl p-4 md:p-5 border border-gray-100 shadow-sm">
+                        <div className="text-2xl md:text-3xl font-bold text-emerald-500">{completedHW}</div>
+                        <div className="text-xs md:text-sm text-gray-500 mt-1">Сдано заданий</div>
+                    </div>
+                    <div className="bg-white rounded-2xl p-4 md:p-5 border border-gray-100 shadow-sm relative">
+                        {pendingHW > 0 && <div className="absolute top-3 right-3 w-2 h-2 bg-amber-500 rounded-full" />}
+                        <div className="text-2xl md:text-3xl font-bold text-amber-500">{pendingHW}</div>
+                        <div className="text-xs md:text-sm text-gray-500 mt-1">Нужно сдать</div>
                     </div>
                 </div>
 
-                {/* Урок сегодня */}
-                {todayLessons.length > 0 && (
-                    <div className="mb-5 bg-indigo-600 rounded-2xl p-4 md:p-5 text-white">
-                        <div className="text-xs font-medium text-indigo-200 mb-2">🔔 Сегодня</div>
-                        {todayLessons.map(l => (
-                            <div key={l.id} className="flex items-center justify-between gap-3">
-                                <div>
-                                    <div className="text-lg md:text-xl font-bold">{l.subject}</div>
-                                    <div className="text-indigo-200 text-sm mt-0.5">{l.lesson_time?.slice(0, 5)} · {l.duration_minutes} мин</div>
-                                </div>
-                                {l.zoom_link && (
-                                    <a href={l.zoom_link} target="_blank" className="bg-white text-indigo-600 font-semibold px-3 md:px-4 py-2 rounded-xl text-sm hover:bg-indigo-50 flex-shrink-0">
-                                        🎥 Войти
-                                    </a>
-                                )}
-                            </div>
-                        ))}
-                    </div>
-                )}
-
-                {/* Навигация десктоп */}
-                <div className="hidden md:grid grid-cols-4 gap-3 mb-6">
-                    <Link href="/student/schedule" className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 hover:border-indigo-300 transition-colors text-center">
-                        <div className="text-2xl mb-2">📅</div>
-                        <div className="text-sm font-medium text-slate-700">Расписание</div>
+                {/* Быстрый доступ */}
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-6">
+                    <Link href="/student/schedule" className="bg-indigo-50 hover:bg-indigo-100 transition-colors rounded-2xl p-4 flex items-center gap-3 border border-indigo-100">
+                        <span className="text-xl md:text-2xl">📅</span>
+                        <div>
+                            <div className="font-medium text-indigo-900 text-sm">Расписание</div>
+                            <div className="text-xs text-indigo-400 hidden md:block">Мои уроки</div>
+                        </div>
                     </Link>
-                    <Link href="/student/homework" className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 hover:border-indigo-300 transition-colors text-center relative">
-                        <div className="text-2xl mb-2">📚</div>
-                        <div className="text-sm font-medium text-slate-700">Домашка</div>
-                        {pendingHW.length > 0 && (
-                            <span className="absolute top-3 right-3 bg-orange-500 text-white text-xs w-5 h-5 rounded-full flex items-center justify-center font-bold">
-                                {pendingHW.length}
-                            </span>
+                    <Link href="/student/homework" className="bg-amber-50 hover:bg-amber-100 transition-colors rounded-2xl p-4 flex items-center gap-3 border border-amber-100 relative">
+                        <span className="text-xl md:text-2xl">📚</span>
+                        <div>
+                            <div className="font-medium text-amber-900 text-sm">Домашка</div>
+                            <div className="text-xs text-amber-400 hidden md:block">Задания</div>
+                        </div>
+                        {pendingHW > 0 && (
+                            <span className="absolute top-2 right-2 bg-red-500 text-white text-xs w-5 h-5 rounded-full flex items-center justify-center font-bold">{pendingHW}</span>
                         )}
                     </Link>
-                    <Link href="/student/grades" className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 hover:border-indigo-300 transition-colors text-center">
-                        <div className="text-2xl mb-2">⭐</div>
-                        <div className="text-sm font-medium text-slate-700">Оценки</div>
+                    <Link href="/topics" className="bg-emerald-50 hover:bg-emerald-100 transition-colors rounded-2xl p-4 flex items-center gap-3 border border-emerald-100">
+                        <span className="text-xl md:text-2xl">📊</span>
+                        <div>
+                            <div className="font-medium text-emerald-900 text-sm">Темы</div>
+                            <div className="text-xs text-emerald-400 hidden md:block">Пройденный материал</div>
+                        </div>
                     </Link>
-                    <Link href="/topics" className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 hover:border-indigo-300 transition-colors text-center">
-                        <div className="text-2xl mb-2">📊</div>
-                        <div className="text-sm font-medium text-slate-700">Темы</div>
+                    <Link href="/materials" className="bg-sky-50 hover:bg-sky-100 transition-colors rounded-2xl p-4 flex items-center gap-3 border border-sky-100">
+                        <span className="text-xl md:text-2xl">📂</span>
+                        <div>
+                            <div className="font-medium text-sky-900 text-sm">Материалы</div>
+                            <div className="text-xs text-sky-400 hidden md:block">Учебные материалы</div>
+                        </div>
+                    </Link>
+                    <Link href="/student/grades" className="bg-violet-50 hover:bg-violet-100 transition-colors rounded-2xl p-4 flex items-center gap-3 border border-violet-100">
+                        <span className="text-xl md:text-2xl">⭐</span>
+                        <div>
+                            <div className="font-medium text-violet-900 text-sm">Оценки</div>
+                            <div className="text-xs text-violet-400 hidden md:block">Мои результаты</div>
+                        </div>
+                    </Link>
+                    <Link href="/student/profile" className="bg-gray-100 hover:bg-gray-200 transition-colors rounded-2xl p-4 flex items-center gap-3 border border-gray-200">
+                        <span className="text-xl md:text-2xl">👤</span>
+                        <div>
+                            <div className="font-medium text-gray-800 text-sm">Профиль</div>
+                            <div className="text-xs text-gray-400 hidden md:block">Настройки</div>
+                        </div>
                     </Link>
                 </div>
 
                 {/* Ближайшие уроки */}
-                <div className="bg-white rounded-2xl shadow-sm border border-slate-100 mb-4">
-                    <div className="px-4 md:px-5 py-4 border-b border-slate-100 flex items-center justify-between">
-                        <div className="font-semibold text-slate-900 text-sm md:text-base">Ближайшие уроки</div>
-                        <Link href="/student/schedule" className="text-xs md:text-sm text-indigo-600 hover:underline">Все →</Link>
+                <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+                    <div className="flex items-center justify-between px-5 py-4 border-b border-gray-50">
+                        <h2 className="font-semibold text-gray-900">📅 Ближайшие уроки</h2>
+                        <Link href="/student/schedule" className="text-sm text-indigo-600 hover:underline">Все →</Link>
                     </div>
-                    {lessons.length === 0 ? (
-                        <div className="px-4 py-8 text-center text-slate-400 text-sm">Нет запланированных уроков</div>
-                    ) : (
-                        <div className="divide-y divide-slate-50">
-                            {lessons.slice(0, 3).map(l => (
-                                <div key={l.id} className="px-4 md:px-5 py-3 flex items-center gap-3">
-                                    <div className="text-center bg-indigo-50 rounded-xl px-3 py-2 min-w-[56px] flex-shrink-0">
-                                        <div className="text-xs text-indigo-500">
-                                            {new Date(l.lesson_date + "T00:00:00").toLocaleDateString("ru-RU", { day: "numeric", month: "short" })}
-                                        </div>
-                                        <div className="text-sm font-bold text-indigo-700">{l.lesson_time?.slice(0, 5)}</div>
-                                    </div>
-                                    <div className="flex-1 min-w-0">
-                                        <div className="font-medium text-slate-800 text-sm truncate">{l.subject}</div>
-                                        <div className="text-xs text-slate-400">{l.duration_minutes} мин</div>
-                                    </div>
-                                    {l.zoom_link && (
-                                        <a href={l.zoom_link} target="_blank" className="text-xs bg-blue-100 text-blue-700 px-2 md:px-3 py-1.5 rounded-lg hover:bg-blue-200 flex-shrink-0">Zoom</a>
-                                    )}
-                                </div>
-                            ))}
+                    {upcomingLessons.length === 0 ? (
+                        <div className="px-5 py-12 text-center">
+                            <div className="text-3xl mb-2">📭</div>
+                            <div className="text-gray-400 text-sm">Уроков пока нет</div>
                         </div>
-                    )}
-                </div>
-
-                {/* Домашка */}
-                <div className="bg-white rounded-2xl shadow-sm border border-slate-100">
-                    <div className="px-4 md:px-5 py-4 border-b border-slate-100 flex items-center justify-between">
-                        <div className="font-semibold text-slate-900 text-sm md:text-base">Домашние задания</div>
-                        <Link href="/student/homework" className="text-xs md:text-sm text-indigo-600 hover:underline">Все →</Link>
-                    </div>
-                    {homeworks.length === 0 ? (
-                        <div className="px-4 py-8 text-center text-slate-400 text-sm">Нет заданий</div>
                     ) : (
-                        <div className="divide-y divide-slate-50">
-                            {homeworks.slice(0, 3).map(hw => (
-                                <div key={hw.id} className="px-4 md:px-5 py-3 flex items-center gap-3">
-                                    <div className={`w-2 h-2 rounded-full flex-shrink-0 ${hw.status === "assigned" ? "bg-orange-400" : hw.status === "submitted" ? "bg-blue-400" : "bg-green-400"}`} />
-                                    <div className="flex-1 min-w-0">
-                                        <div className="font-medium text-slate-800 text-sm truncate">{hw.title}</div>
-                                        {hw.due_date && <div className="text-xs text-slate-400">до {new Date(hw.due_date).toLocaleDateString("ru-RU")}</div>}
+                        <div className="divide-y divide-gray-50">
+                            {upcomingLessons.map(lesson => (
+                                <div key={lesson.id} className="px-5 py-4 flex items-center justify-between hover:bg-gray-50 transition-colors">
+                                    <div className="flex items-center gap-3 md:gap-4 min-w-0">
+                                        <div className="text-center bg-indigo-50 rounded-xl px-3 py-2 min-w-[64px] flex-shrink-0">
+                                            <div className="text-xs text-indigo-400 font-medium">{getDayLabel(lesson.lesson_date)}</div>
+                                            <div className="text-sm font-bold text-indigo-700">{lesson.lesson_time?.slice(0, 5)}</div>
+                                        </div>
+                                        <div className="min-w-0">
+                                            <div className="font-medium text-gray-900 text-sm truncate">{lesson.subject}</div>
+                                            {lesson.topic && <div className="text-xs text-indigo-400 mt-0.5 truncate">📌 {lesson.topic}</div>}
+                                            {lesson.duration_minutes && <div className="text-xs text-gray-400 mt-0.5">⏱ {lesson.duration_minutes} мин</div>}
+                                        </div>
                                     </div>
-                                    {hw.grade && <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-lg font-medium flex-shrink-0">{hw.grade}</span>}
-                                    {hw.status === "assigned" && (
-                                        <Link href="/student/homework" className="text-xs bg-indigo-100 text-indigo-700 px-2 md:px-3 py-1.5 rounded-lg flex-shrink-0">Сдать</Link>
+                                    {lesson.zoom_link && (
+                                        <a href={lesson.zoom_link} target="_blank" rel="noopener noreferrer"
+                                            className="text-xs bg-indigo-50 text-indigo-600 px-3 py-1.5 rounded-lg hover:bg-indigo-100 transition-colors font-medium flex-shrink-0">
+                                            🔗 Войти
+                                        </a>
                                     )}
                                 </div>
                             ))}
@@ -215,37 +245,32 @@ export default function StudentPage() {
                 </div>
             </div>
 
-            {/* Нижняя навигация мобиле */}
-            <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-slate-100 px-2 py-2 z-20">
+            {/* Мобайл нижняя навигация */}
+            <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-gray-100 px-1 py-2 z-20">
                 <div className="flex items-center justify-around">
-                    <Link href="/student" className="flex flex-col items-center gap-1 px-3 py-1.5 rounded-xl bg-indigo-50">
+                    <Link href="/student" className="flex flex-col items-center gap-0.5 px-2 py-1.5 rounded-xl bg-indigo-50">
                         <span className="text-lg">🏠</span>
                         <span className="text-xs text-indigo-700 font-medium">Главная</span>
                     </Link>
-                    <Link href="/student/schedule" className="flex flex-col items-center gap-1 px-3 py-1.5 rounded-xl">
+                    <Link href="/student/schedule" className="flex flex-col items-center gap-0.5 px-2 py-1.5 rounded-xl">
                         <span className="text-lg">📅</span>
-                        <span className="text-xs text-slate-500">Уроки</span>
+                        <span className="text-xs text-gray-500">Уроки</span>
                     </Link>
-                    <Link href="/student/homework" className="flex flex-col items-center gap-1 px-3 py-1.5 rounded-xl relative">
+                    <Link href="/student/homework" className="flex flex-col items-center gap-0.5 px-2 py-1.5 rounded-xl relative">
                         <span className="text-lg">📚</span>
-                        <span className="text-xs text-slate-500">Домашка</span>
-                        {pendingHW.length > 0 && (
-                            <span className="absolute top-0 right-1 bg-orange-500 text-white text-xs w-4 h-4 rounded-full flex items-center justify-center font-bold">
-                                {pendingHW.length}
-                            </span>
-                        )}
+                        <span className="text-xs text-gray-500">Домашка</span>
+                        {pendingHW > 0 && <span className="absolute top-0 right-0 bg-red-500 text-white text-xs w-4 h-4 rounded-full flex items-center justify-center font-bold">{pendingHW}</span>}
                     </Link>
-                    <Link href="/student/grades" className="flex flex-col items-center gap-1 px-3 py-1.5 rounded-xl">
-                        <span className="text-lg">⭐</span>
-                        <span className="text-xs text-slate-500">Оценки</span>
-                    </Link>
-                    <Link href="/topics" className="flex flex-col items-center gap-1 px-3 py-1.5 rounded-xl">
+                    <Link href="/topics" className="flex flex-col items-center gap-0.5 px-2 py-1.5 rounded-xl">
                         <span className="text-lg">📊</span>
-                        <span className="text-xs text-slate-500">Темы</span>
+                        <span className="text-xs text-gray-500">Темы</span>
+                    </Link>
+                    <Link href="/student/profile" className="flex flex-col items-center gap-0.5 px-2 py-1.5 rounded-xl">
+                        <span className="text-lg">👤</span>
+                        <span className="text-xs text-gray-500">Профиль</span>
                     </Link>
                 </div>
             </div>
-
         </div>
     );
 }
