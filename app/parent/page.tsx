@@ -77,7 +77,7 @@ export default function ParentHomePage() {
                 const { data: children } = await supabase
                     .from("profiles").select("id, full_name")
                     .eq("parent_id", user.id).eq("role", "student");
-                if (children?.length > 0) {
+                if (children && children.length > 0) {
                     studentIds = children.map((c: any) => c.id);
                     if (children[0]?.full_name) setStudentName(children[0].full_name);
                 }
